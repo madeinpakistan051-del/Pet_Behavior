@@ -3,6 +3,7 @@
 # Deploy on Railway.app
 
 import os
+print("🚀🚀🚀 SERVER IS RUNNING THE NEW GROQ CODE! 🚀🚀🚀") # <-- Add this line!
 import uuid
 import shutil
 import time
