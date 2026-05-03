@@ -3,86 +3,126 @@
 # Deploy on Railway.app
 
 import os
-print("🚀🚀🚀 SERVER IS RUNNING THE NEW GROQ CODE! 🚀🚀🚀") # <-- Add this line!
+print("🚀🚀🚀 SERVER IS RUNNING THE NEW GROQ CODE! 🚀🚀🚀")
 import uuid
 import shutil
 import time
-import json # Added for Groq
+import json
 from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from groq import Groq # Added Groq
+from groq import Groq
 
 from inference import PetBehaviorEngine
 
-# ── Model paths (Absolute) ───────────────────────────
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_DIR = os.getenv("MODEL_DIR", os.path.join(BASE_DIR, "models"))
+# ── Model paths ──────────────────────────────────────────────────────
+BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
+MODEL_DIR   = os.getenv("MODEL_DIR", os.path.join(BASE_DIR, "models"))
 
 XGB_PATH    = os.path.join(MODEL_DIR, "xgboost_model.pkl")
 SCALER_PATH = os.path.join(MODEL_DIR, "flow_scaler.pkl")
 CNN_PATH    = os.path.join(MODEL_DIR, "cnn_scripted.pt")
 
-# ── Upload temp directory ─────────────────────────────────────────────
-UPLOAD_DIR  = "/tmp/smart_paws_uploads"
+# ── Upload temp directory ────────────────────────────────────────────
+UPLOAD_DIR = "/tmp/smart_paws_uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-# ── Max video size: 50 MB ─────────────────────────────────────────────
+# ── Max video size: 50 MB ────────────────────────────────────────────
 MAX_VIDEO_BYTES = 50 * 1024 * 1024
 
-# ── Global engine (loaded once at startup) ────────────────────────────
+# ── Global engine ────────────────────────────────────────────────────
 engine: PetBehaviorEngine = None
 
-# ── Groq Client Initialization ────────────────────────────────────────
-api_key = os.getenv("GROQ_API_KEY")
+# ── Groq client ──────────────────────────────────────────────────────
+api_key     = os.getenv("GROQ_API_KEY")
 groq_client = Groq(api_key=api_key) if api_key else None
 if not groq_client:
     print("WARNING: GROQ_API_KEY not found. Will fall back to raw model output.")
 
+
+# ════════════════════════════════════════════════════════════════════
+# STARTUP — verify models exist before loading
+# ════════════════════════════════════════════════════════════════════
+
+def verify_models():
+    """Check all model files are present. Raise a clear error if not."""
+    missing = []
+    for path in [XGB_PATH, SCALER_PATH, CNN_PATH]:
+        if not os.path.exists(path):
+            missing.append(path)
+        else:
+            size_mb = os.path.getsize(path) / (1024 * 1024)
+            print(f"  ✓ Found {os.path.basename(path)} ({size_mb:.1f} MB)")
+
+    if missing:
+        for p in missing:
+            print(f"  ✗ MISSING: {p}")
+        raise FileNotFoundError(
+            f"Model files not found: {missing}\n"
+            "Make sure the 'models/' folder is committed to your repository."
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load models at startup, clean up at shutdown."""
     global engine
-    print("Loading models …")
+
+    # 1. Verify all model files exist
+    print("Verifying model files …")
+    try:
+        verify_models()
+    except FileNotFoundError as e:
+        print(f"ERROR: {e}")
+        print("API will start but /analyze will return errors.")
+        yield
+        return
+
+    # 2. Load models into memory
+    print("Loading models into memory …")
     try:
         engine = PetBehaviorEngine(
             xgb_path    = XGB_PATH,
             scaler_path = SCALER_PATH,
             cnn_path    = CNN_PATH,
         )
-        print("All models loaded. API is ready.")
+        print("✅ All models loaded. API is ready.")
     except Exception as e:
         print(f"ERROR loading models: {e}")
         print("API will start but /analyze will return errors.")
+
     yield
+
     # Cleanup on shutdown
     if os.path.exists(UPLOAD_DIR):
         shutil.rmtree(UPLOAD_DIR, ignore_errors=True)
     print("API shut down cleanly.")
 
 
-# ── FastAPI app ───────────────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════════
+# FASTAPI APP
+# ════════════════════════════════════════════════════════════════════
+
 app = FastAPI(
     title       = "Smart Paws — AI Behaviour Checker",
     description = "Analyzes pet behavior from text descriptions and video clips.",
     version     = "1.0.0",
-    lifespan     = lifespan,
+    lifespan    = lifespan,
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins  = ["*"],
-    allow_methods  = ["GET", "POST"],
-    allow_headers  = ["*"],
+    allow_origins = ["*"],
+    allow_methods = ["GET", "POST"],
+    allow_headers = ["*"],
 )
 
 
-# ═════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════
 # ROUTES
-# ═════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════
 
 @app.get("/")
 async def root():
@@ -100,7 +140,6 @@ async def root():
 
 @app.get("/health")
 async def health():
-    """Health check endpoint."""
     return {
         "status":        "ok",
         "model_loaded":  engine is not None,
@@ -132,7 +171,7 @@ async def analyze_behavior(
     start_time     = time.time()
 
     try:
-        # ── Save uploaded video to temp ───────────────────────────────
+        # ── Save uploaded video to temp ──────────────────────────────
         if has_video:
             content = await video.read()
             if len(content) > MAX_VIDEO_BYTES:
@@ -142,8 +181,7 @@ async def analyze_behavior(
                 )
 
             ext = os.path.splitext(video.filename)[-1].lower() or ".mp4"
-            allowed_ext = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
-            if ext not in allowed_ext:
+            if ext not in {".mp4", ".mov", ".avi", ".mkv", ".webm"}:
                 return JSONResponse(
                     status_code=415,
                     content={"detail": f"Unsupported format '{ext}'. Use MP4, MOV, or AVI."}
@@ -153,7 +191,7 @@ async def analyze_behavior(
             with open(tmp_video_path, "wb") as f:
                 f.write(content)
 
-        # ── 1. Run inference using your local PyTorch/XGBoost engine ───
+        # ── 1. Run local inference ───────────────────────────────────
         raw_result = engine.predict(
             text       = description or "",
             video_path = tmp_video_path,
@@ -161,7 +199,7 @@ async def analyze_behavior(
             animal     = animal or "unknown",
         )
 
-    # ── 2. Format output with Groq for the Flutter UI ──────────────
+        # ── 2. Format with Groq ──────────────────────────────────────
         final_ui_result = None
 
         if groq_client:
@@ -185,10 +223,9 @@ async def analyze_behavior(
                     "DO NOT use old keys like 'detected_behavior'. YOU MUST ONLY use the schema above."
                 )
 
-                # THE TRICK: Extract values so Groq doesn't copy the raw JSON keys
                 raw_behavior = raw_result.get("detected_behavior", "Unknown")
-                raw_conf = raw_result.get("confidence", 0.0)
-                
+                raw_conf     = raw_result.get("confidence", 0.0)
+
                 user_prompt = (
                     f"User Description: {description}\n"
                     f"AI Detection: {raw_behavior}\n"
@@ -199,33 +236,29 @@ async def analyze_behavior(
                 chat_completion = groq_client.chat.completions.create(
                     messages=[
                         {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt}
+                        {"role": "user",   "content": user_prompt},
                     ],
-                    model="llama-3.3-70b-versatile",
-                    response_format={"type": "json_object"} 
+                    model           = "llama-3.3-70b-versatile",
+                    response_format = {"type": "json_object"},
                 )
-                # Extract the raw string
-                raw_content = chat_completion.choices[0].message.content
-                
-                # Strip out any annoying markdown backticks if Groq accidentally added them
-                clean_content = raw_content.replace('```json', '').replace('```', '').strip()
-                
-                # Parse the clean JSON
+
+                raw_content     = chat_completion.choices[0].message.content
+                clean_content   = raw_content.replace("```json", "").replace("```", "").strip()
                 final_ui_result = json.loads(clean_content)
-            
+
             except Exception as e:
-                print(f"Groq formatting failed, using fallback logic: {e}")
+                print(f"Groq formatting failed, using fallback: {e}")
 
-
-        # ── 3. Fallback logic if Groq fails or is missing ──────────────
+        # ── 3. Fallback if Groq fails ────────────────────────────────
         if not final_ui_result:
             final_ui_result = {
-                "diagnosis": str(raw_result.get("detected_behavior", "Unknown Behavior")).title(),
+                "diagnosis":  str(raw_result.get("detected_behavior", "Unknown Behavior")).title(),
                 "confidence": "Analysis Complete",
                 "indicators": [{"icon": "warning", "text": "See recommendations below", "color": "orange"}],
-                "actions": [
-                    {"title": "Suggestion", "desc": s} for s in raw_result.get("suggestions", ["Consult a vet for further advice."])
-                ]
+                "actions":    [
+                    {"title": "Suggestion", "desc": s}
+                    for s in raw_result.get("suggestions", ["Consult a vet for further advice."])
+                ],
             }
 
         final_ui_result["processing_time_ms"] = round((time.time() - start_time) * 1000)
@@ -239,9 +272,9 @@ async def analyze_behavior(
         )
 
     finally:
-        # Always clean up the temp file
         if tmp_video_path and os.path.exists(tmp_video_path):
             os.remove(tmp_video_path)
+
 
 if __name__ == "__main__":
     import uvicorn
