@@ -19,7 +19,7 @@ from groq import Groq # Added Groq
 from inference import PetBehaviorEngine
 
 # ── Model paths (relative to project root) ───────────────────────────
-MODEL_DIR   = os.getenv("MODEL_DIR", "./models")
+MODEL_DIR   = os.getenv("MODEL_DIR", "models")
 XGB_PATH    = os.path.join(MODEL_DIR, "xgboost_model.pkl")
 SCALER_PATH = os.path.join(MODEL_DIR, "flow_scaler.pkl")
 CNN_PATH    = os.path.join(MODEL_DIR, "cnn_scripted.pt")
