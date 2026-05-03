@@ -69,7 +69,7 @@ app = FastAPI(
     title       = "Smart Paws — AI Behaviour Checker",
     description = "Analyzes pet behavior from text descriptions and video clips.",
     version     = "1.0.0",
-    lifspan     = lifespan,
+    lifespan     = lifespan,
 )
 
 app.add_middleware(
