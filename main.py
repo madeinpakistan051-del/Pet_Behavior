@@ -201,8 +201,14 @@ async def analyze_behavior(
                     model="llama-3.3-70b-versatile",
                     response_format={"type": "json_object"} 
                 )
+                # Extract the raw string
+                raw_content = chat_completion.choices[0].message.content
                 
-                final_ui_result = json.loads(chat_completion.choices[0].message.content)
+                # Strip out any annoying markdown backticks if Groq accidentally added them
+                clean_content = raw_content.replace('```json', '').replace('```', '').strip()
+                
+                # Parse the clean JSON
+                final_ui_result = json.loads(clean_content)
             
             except Exception as e:
                 print(f"Groq formatting failed, using fallback logic: {e}")
